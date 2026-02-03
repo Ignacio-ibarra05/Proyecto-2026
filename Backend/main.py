@@ -1,10 +1,8 @@
 # backend/main.py
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import mediapipe as mp
 import cv2
 import numpy as np
-from io import BytesIO
 import logging
 
 # Configurar logging
@@ -17,30 +15,42 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configurar CORS para permitir requests desde el frontend
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especifica tu dominio: ["https://tu-usuario.github.io"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Inicializar MediaPipe
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=True,
-    model_complexity=2,
-    enable_segmentation=False,
-    min_detection_confidence=0.5
-)
+# Importar MediaPipe de forma correcta para versiones nuevas
+try:
+    # Intentar importar la API nueva primero
+    from mediapipe.python.solutions import pose as mp_pose_module
+    from mediapipe.python.solutions import drawing_utils as mp_drawing
+    
+    # Inicializar el detector
+    pose_detector = mp_pose_module.Pose(
+        static_image_mode=True,
+        model_complexity=2,
+        enable_segmentation=False,
+        min_detection_confidence=0.5
+    )
+    
+    # Obtener las conexiones
+    POSE_CONNECTIONS = mp_pose_module.POSE_CONNECTIONS
+    
+    logger.info("MediaPipe cargado con API legacy (python.solutions)")
+    
+except (ImportError, AttributeError):
+    logger.error("No se pudo cargar MediaPipe")
+    raise
 
-# Tamaño máximo de archivo (10MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
 @app.get("/")
 def read_root():
-    """Endpoint de health check"""
     return {
         "message": "API de detección de pose 3D funcionando",
         "status": "online",
@@ -49,22 +59,14 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """Endpoint adicional para monitoreo"""
     return {"status": "healthy"}
 
 @app.post("/api/detect-pose")
 async def detect_pose(file: UploadFile = File(...)):
     """
     Detecta la pose de una persona en una imagen y retorna landmarks 3D
-    
-    Args:
-        file: Imagen en formato JPG, PNG, etc.
-    
-    Returns:
-        JSON con landmarks 3D y conexiones entre articulaciones
     """
     
-    # Validar tipo de archivo
     if not file.content_type.startswith('image/'):
         raise HTTPException(
             status_code=400, 
@@ -79,7 +81,7 @@ async def detect_pose(file: UploadFile = File(...)):
         if len(contents) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"La imagen es demasiado grande. Máximo {MAX_FILE_SIZE // (1024*1024)}MB"
+                detail=f"La imagen es demasiado grande. Máximo 10MB"
             )
         
         # Decodificar imagen
@@ -89,14 +91,16 @@ async def detect_pose(file: UploadFile = File(...)):
         if image is None:
             raise HTTPException(
                 status_code=400,
-                detail="No se pudo decodificar la imagen. Asegúrate de que sea un formato válido."
+                detail="No se pudo decodificar la imagen. Formato inválido."
             )
         
-        # Log información de la imagen
-        logger.info(f"Procesando imagen: {file.filename}, Tamaño: {image.shape}")
+        logger.info(f"Procesando imagen: {file.filename}, Shape: {image.shape}")
+        
+        # Convertir BGR a RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         # Procesar con MediaPipe
-        results = pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        results = pose_detector.process(image_rgb)
         
         if not results.pose_world_landmarks:
             return {
@@ -110,7 +114,7 @@ async def detect_pose(file: UploadFile = File(...)):
         for idx, landmark in enumerate(results.pose_world_landmarks.landmark):
             landmarks.append({
                 "id": idx,
-                "x": float(landmark.x),  # Asegurar que sean floats serializables
+                "x": float(landmark.x),
                 "y": float(landmark.y),
                 "z": float(landmark.z),
                 "visibility": float(landmark.visibility)
@@ -118,10 +122,10 @@ async def detect_pose(file: UploadFile = File(...)):
         
         # Definir conexiones (huesos)
         connections = [
-            [int(conn[0]), int(conn[1])] for conn in mp_pose.POSE_CONNECTIONS
+            [int(conn[0]), int(conn[1])] for conn in POSE_CONNECTIONS
         ]
         
-        logger.info(f"Pose detectada exitosamente: {len(landmarks)} landmarks")
+        logger.info(f"✓ Pose detectada: {len(landmarks)} landmarks")
         
         return {
             "success": True,
@@ -137,14 +141,17 @@ async def detect_pose(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error procesando imagen: {str(e)}")
+        logger.error(f"Error procesando imagen: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error interno al procesar la imagen: {str(e)}"
+            detail=f"Error interno: {str(e)}"
         )
 
 @app.on_event("shutdown")
 def shutdown_event():
-    """Cerrar recursos al apagar el servidor"""
-    pose.close()
-    logger.info("API cerrada correctamente")
+    """Cerrar recursos al apagar"""
+    try:
+        pose_detector.close()
+        logger.info("Recursos cerrados correctamente")
+    except:
+        pass
