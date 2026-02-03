@@ -1,6 +1,6 @@
-// frontend/src/App.jsx
 import { useState } from 'react';
 import Skeleton3D from './components/Skeleton3D';
+import { API_URL } from './config';
 import './App.css';
 
 function App() {
@@ -21,12 +21,13 @@ function App() {
     // Enviar al backend
     setLoading(true);
     setError(null);
+    setPoseData(null);
     
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const response = await fetch('http://localhost:8000/api/detect-pose', {
+      const response = await fetch(`${API_URL}/api/detect-pose`, {
         method: 'POST',
         body: formData,
       });
@@ -39,7 +40,7 @@ function App() {
         setError(data.error || 'Error al procesar la imagen');
       }
     } catch (err) {
-      setError('Error de conexión con el servidor');
+      setError('Error de conexión con el servidor. Intenta de nuevo.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -66,7 +67,12 @@ function App() {
             📸 Seleccionar Imagen
           </label>
           
-          {loading && <p className="status">Procesando imagen...</p>}
+          {loading && (
+            <div className="status">
+              <div className="spinner"></div>
+              <p>Procesando imagen...</p>
+            </div>
+          )}
           {error && <p className="error">{error}</p>}
         </div>
 
@@ -82,10 +88,21 @@ function App() {
             <div className="skeleton-section">
               <h3>Modelo 3D Generado</h3>
               <Skeleton3D poseData={poseData} />
-              <p className="hint">💡 Arrastra para rotar, scroll para zoom</p>
+              <p className="hint">💡 Arrastra para rotar • Scroll para zoom</p>
             </div>
           )}
         </div>
+
+        {!previewImage && !loading && (
+          <div className="instructions">
+            <h3>📌 Instrucciones</h3>
+            <ul>
+              <li>Selecciona una imagen con una persona visible</li>
+              <li>La imagen será procesada usando inteligencia artificial</li>
+              <li>Se generará un modelo 3D interactivo de la pose</li>
+            </ul>
+          </div>
+        )}
       </main>
     </div>
   );
